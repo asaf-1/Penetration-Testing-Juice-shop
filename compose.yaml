@@ -1,0 +1,45 @@
+name: playwright-security-lab
+
+services:
+  juice-shop:
+    image: ${JUICE_SHOP_IMAGE:-bkimminich/juice-shop:latest}
+    expose:
+      - "3000"
+    networks:
+      - lab
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  audit:
+    build:
+      context: .
+    depends_on:
+      juice-shop:
+        condition: service_started
+    environment:
+      TARGET_URL: ${DOCKER_TARGET_URL:-http://juice-shop:3000}
+      REPORTS_DIR: /work/reports
+      PLAYWRIGHT_HTML_REPORT: /work/playwright-report
+      PLAYWRIGHT_TEST_RESULTS: /tmp/test-results
+      CI: "true"
+    volumes:
+      - ./reports:/work/reports
+      - ./playwright-report:/work/playwright-report
+    networks:
+      - lab
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/pwuser/.cache
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: 2g
+
+networks:
+  lab:
+    internal: true
