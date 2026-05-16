@@ -2,14 +2,6 @@
 
 Professional Playwright infrastructure for a legal, non-destructive web security testing demo. The default Docker workflow runs OWASP Juice Shop and the Playwright runner on an isolated internal Docker network.
 
-## Safety Model
-
-- Tests only target `TARGET_URL`.
-- The Docker workflow does not expose Juice Shop to your host network by default.
-- The runner uses safe GET, OPTIONS, browser navigation, and negative-login checks.
-- No brute force, malware, destructive requests, credential theft, or filesystem access outside the project artifacts.
-- Use only the included lab, OWASP Juice Shop, or systems where you have explicit written permission.
-
 ## Recommended Interview Demo
 
 ```powershell
