@@ -1,6 +1,8 @@
 node_modules/
+.claude/
 playwright-report/
 test-results/
+coverage/
 reports/*
 !reports/
 !reports/project-explanation.md

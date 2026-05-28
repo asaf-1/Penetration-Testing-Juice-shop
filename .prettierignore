@@ -1,0 +1,9 @@
+node_modules
+.claude
+reports
+playwright-report
+test-results
+coverage
+dist
+package-lock.json
+*.sarif

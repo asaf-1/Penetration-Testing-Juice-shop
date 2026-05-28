@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { test, type APIRequestContext, type APIResponse, type Page } from '@playwright/test';
-import { AuditReport, cleanFileName, type Evidence } from '../src/audit-report';
+import { cleanFileName, type Evidence, type Finding } from '../src/findings';
 import { loadAuditConfig } from '../src/config';
 import {
   closeJuiceShopOverlays,
@@ -25,24 +25,62 @@ const config = loadAuditConfig();
 const targetUrl = config.targetUrl;
 const reportsDir = config.reportsDir;
 const evidenceDir = config.evidenceDir;
-const audit = new AuditReport(targetUrl, reportsDir);
+
+// How long to poll for the target before declaring it unreachable. Kept short by
+// default so a missing target fails fast with a clear finding instead of hanging.
+// Raise TARGET_WAIT_MS (e.g. in CI, where the app may still be booting) as needed.
+const targetWaitMs = Number(process.env.TARGET_WAIT_MS ?? 20_000);
+
+const pendingFindings: Finding[] = [];
+const audit = {
+  add(finding: Finding): void {
+    try {
+      const testInfo = test.info();
+      testInfo.attachments.push({
+        name: 'security-finding',
+        contentType: 'application/json',
+        body: Buffer.from(JSON.stringify(finding))
+      });
+    } catch {
+      pendingFindings.push(finding);
+    }
+  }
+};
+
 let targetReachable = false;
 let targetStatus: number | null = null;
 let targetHeaders: Record<string, string> = {};
 let targetError: string | null = null;
 
 test.describe.serial('authorized lab security automation', () => {
+  // Playwright requires the first hook argument to use object destructuring.
+  // eslint-disable-next-line no-empty-pattern
+  test.beforeEach(async ({}, testInfo) => {
+    while (pendingFindings.length > 0) {
+      const finding = pendingFindings.shift();
+      testInfo.attachments.push({
+        name: 'security-finding',
+        contentType: 'application/json',
+        body: Buffer.from(JSON.stringify(finding))
+      });
+    }
+  });
+
   test.beforeAll(async ({ request }) => {
+    // Give the hook enough headroom to finish polling and record the
+    // unreachable-target finding instead of being killed mid-wait.
+    test.setTimeout(targetWaitMs + 15_000);
+
     clearDirectoryContents(reportsDir);
     fs.mkdirSync(evidenceDir, { recursive: true });
 
     try {
-      const response = await waitForTarget(request, targetUrl);
+      const response = await waitForTarget(request, targetUrl, targetWaitMs);
       targetStatus = response.status();
       targetHeaders = response.headers();
       targetReachable = response.status() < 400;
 
-      if (!targetReachable) { 
+      if (!targetReachable) {
         audit.add({
           id: 'TARGET-001',
           title: 'Target was not reachable for active checks',
@@ -50,7 +88,8 @@ test.describe.serial('authorized lab security automation', () => {
           category: 'Execution',
           status: 'observed',
           description: 'The configured target returned a non-success status before browser checks could run.',
-          impact: 'The audit could not exercise the application. Findings from this run are limited to availability.',
+          impact:
+            'The audit could not exercise the application. Findings from this run are limited to availability.',
           remediation:
             'Start a local OWASP Juice Shop instance or set TARGET_URL to a reachable authorized lab target, then rerun the audit.',
           evidence: [
@@ -69,7 +108,8 @@ test.describe.serial('authorized lab security automation', () => {
         category: 'Execution',
         status: 'observed',
         description: 'Playwright could not connect to the configured target URL.',
-        impact: 'The audit could not exercise the application. Findings from this run are limited to connectivity.',
+        impact:
+          'The audit could not exercise the application. Findings from this run are limited to connectivity.',
         remediation:
           'Start a local OWASP Juice Shop instance or set TARGET_URL to a reachable authorized lab target, then rerun the audit.',
         evidence: [
@@ -78,10 +118,6 @@ test.describe.serial('authorized lab security automation', () => {
         ]
       });
     }
-  });
-
-  test.afterAll(() => {
-    audit.write();
   });
 
   test('recon and response header audit', async ({ page }) => {
@@ -98,8 +134,10 @@ test.describe.serial('authorized lab security automation', () => {
       severity: 'Info',
       category: 'Reconnaissance',
       status: 'observed',
-      description: 'The target loaded successfully in Chromium and a homepage screenshot was captured for the report.',
-      impact: 'This confirms that the automation can reach the scoped lab target and collect repeatable evidence.',
+      description:
+        'The target loaded successfully in Chromium and a homepage screenshot was captured for the report.',
+      impact:
+        'This confirms that the automation can reach the scoped lab target and collect repeatable evidence.',
       remediation: 'No remediation required for the lab report.',
       evidence: [
         { label: 'HTTP status', details: String(targetStatus) },
@@ -131,7 +169,8 @@ test.describe.serial('authorized lab security automation', () => {
         status: 'observed',
         description: 'The HTTP response includes a Server header.',
         impact: 'Technology hints can help attackers tune follow-up research and payloads.',
-        remediation: 'Minimize or normalize server banner details at the reverse proxy or application server.',
+        remediation:
+          'Minimize or normalize server banner details at the reverse proxy or application server.',
         evidence: [{ label: 'Server header', details: serverHeader }]
       });
     }
@@ -145,8 +184,10 @@ test.describe.serial('authorized lab security automation', () => {
         category: 'Header Hardening',
         status: 'manual-review',
         description: 'The initial response did not include a clearly restrictive cache-control policy.',
-        impact: 'Sensitive pages can be stored by browsers or intermediary caches if cache policy is too broad.',
-        remediation: 'Use no-store for sensitive authenticated pages and explicit cache lifetimes for public assets.',
+        impact:
+          'Sensitive pages can be stored by browsers or intermediary caches if cache policy is too broad.',
+        remediation:
+          'Use no-store for sensitive authenticated pages and explicit cache lifetimes for public assets.',
         evidence: [{ label: 'Cache-Control', details: cacheControl ?? 'missing' }]
       });
     }
@@ -190,13 +231,18 @@ test.describe.serial('authorized lab security automation', () => {
       category: 'Reconnaissance',
       status: 'observed',
       description: 'The browser collected page title, script references, storage keys, and visible links.',
-      impact: 'Client-side inventory helps focus manual review on exposed routes, bundled scripts, and browser storage.',
-      remediation: 'No remediation required for the lab report. In production, avoid storing secrets in browser storage.',
+      impact:
+        'Client-side inventory helps focus manual review on exposed routes, bundled scripts, and browser storage.',
+      remediation:
+        'No remediation required for the lab report. In production, avoid storing secrets in browser storage.',
       evidence: [
         { label: 'Title', details: inventory.title },
         { label: 'Script count sampled', details: String(inventory.scriptSources.length) },
         { label: 'Local storage keys', details: inventory.localStorageKeys.join(', ') || 'none observed' },
-        { label: 'Session storage keys', details: inventory.sessionStorageKeys.join(', ') || 'none observed' },
+        {
+          label: 'Session storage keys',
+          details: inventory.sessionStorageKeys.join(', ') || 'none observed'
+        },
         { label: 'Observed browser requests', details: Array.from(observedRequests).slice(0, 15).join(' | ') }
       ]
     });
@@ -264,12 +310,16 @@ test.describe.serial('authorized lab security automation', () => {
       description: 'The login view was inspected for password input autocomplete attributes.',
       impact:
         'Explicit autocomplete values help browsers and password managers handle login fields predictably and reduce accidental credential handling issues.',
-      remediation: 'Set appropriate autocomplete values such as current-password or new-password on password inputs.',
+      remediation:
+        'Set appropriate autocomplete values such as current-password or new-password on password inputs.',
       evidence: [
         { label: 'Password input count', details: String(hygiene.passwordInputs.length) },
         {
           label: 'Missing autocomplete',
-          details: passwordInputsWithoutAutocomplete.map((input) => input.id || input.name || 'unnamed').join(', ') || 'none observed'
+          details:
+            passwordInputsWithoutAutocomplete
+              .map((input) => input.id || input.name || 'unnamed')
+              .join(', ') || 'none observed'
         }
       ]
     });
@@ -284,13 +334,18 @@ test.describe.serial('authorized lab security automation', () => {
       category: 'Browser Hygiene',
       status: blankLinksWithoutNoopener.length > 0 ? 'observed' : 'not-observed',
       description: 'Links that open new tabs were checked for rel=noopener.',
-      impact: 'New-tab links without noopener can allow the opened page to manipulate the original page through window.opener.',
+      impact:
+        'New-tab links without noopener can allow the opened page to manipulate the original page through window.opener.',
       remediation: 'Add rel="noopener noreferrer" to links that use target="_blank".',
       evidence: [
         { label: 'New-tab link count', details: String(hygiene.blankLinks.length) },
         {
           label: 'Missing noopener',
-          details: blankLinksWithoutNoopener.map((link) => link.href).slice(0, 10).join(', ') || 'none observed'
+          details:
+            blankLinksWithoutNoopener
+              .map((link) => link.href)
+              .slice(0, 10)
+              .join(', ') || 'none observed'
         }
       ]
     });
@@ -348,17 +403,25 @@ test.describe.serial('authorized lab security automation', () => {
 
     audit.add({
       id: 'CLT-001',
-      title: exposedSourceMaps.length > 0 ? 'Client source maps are publicly reachable' : 'Client source map exposure not observed',
+      title:
+        exposedSourceMaps.length > 0
+          ? 'Client source maps are publicly reachable'
+          : 'Client source map exposure not observed',
       severity: exposedSourceMaps.length > 0 ? 'Low' : 'Info',
       category: 'Client-Side Exposure',
       status: exposedSourceMaps.length > 0 ? 'manual-review' : 'not-observed',
-      description: 'JavaScript bundles were sampled for sourceMappingURL references and common .map endpoints.',
+      description:
+        'JavaScript bundles were sampled for sourceMappingURL references and common .map endpoints.',
       impact:
         'Public source maps can reveal original source structure, comments, hidden routes, and implementation details that help attackers.',
-      remediation: 'Do not publish production source maps publicly, or restrict access to authorized debugging environments.',
+      remediation:
+        'Do not publish production source maps publicly, or restrict access to authorized debugging environments.',
       evidence: [
         { label: 'Sampled scripts', details: sampledScripts.join(', ') || 'none observed' },
-        { label: 'Source map candidates', details: sourceMapCandidates.slice(0, 20).join(', ') || 'none observed' },
+        {
+          label: 'Source map candidates',
+          details: sourceMapCandidates.slice(0, 20).join(', ') || 'none observed'
+        },
         { label: 'Reachable source maps', details: exposedSourceMaps.join(', ') || 'none observed' }
       ],
       references: ['https://owasp.org/Top10/A05_2021-Security_Misconfiguration/']
@@ -366,14 +429,20 @@ test.describe.serial('authorized lab security automation', () => {
 
     audit.add({
       id: 'CLT-002',
-      title: bundleSecretHints.length > 0 ? 'Potential secret-like strings observed in client bundles' : 'Client bundle secret hint scan clean',
+      title:
+        bundleSecretHints.length > 0
+          ? 'Potential secret-like strings observed in client bundles'
+          : 'Client bundle secret hint scan clean',
       severity: bundleSecretHints.length > 0 ? 'Medium' : 'Info',
       category: 'Client-Side Exposure',
       status: bundleSecretHints.length > 0 ? 'manual-review' : 'not-observed',
       description: 'Sampled JavaScript bundles were scanned for high-signal secret-like assignment patterns.',
       impact: 'Secrets embedded in browser-delivered code are exposed to every user of the application.',
-      remediation: 'Keep secrets server-side and expose only short-lived, least-privilege public configuration where required.',
-      evidence: [{ label: 'Bundles with secret-like hints', details: bundleSecretHints.join(', ') || 'none observed' }],
+      remediation:
+        'Keep secrets server-side and expose only short-lived, least-privilege public configuration where required.',
+      evidence: [
+        { label: 'Bundles with secret-like hints', details: bundleSecretHints.join(', ') || 'none observed' }
+      ],
       references: ['https://owasp.org/Top10/A02_2021-Cryptographic_Failures/']
     });
   });
@@ -395,7 +464,8 @@ test.describe.serial('authorized lab security automation', () => {
         status: 'observed',
         description: 'The product search endpoint is reachable without authentication.',
         impact: 'Public APIs should be reviewed for filtering, rate limits, and safe error handling.',
-        remediation: 'Confirm the endpoint is intentionally public and enforce validation, pagination, and rate limits.',
+        remediation:
+          'Confirm the endpoint is intentionally public and enforce validation, pagination, and rate limits.',
         evidence: [
           { label: 'Endpoint', details: productSearchUrl.toString() },
           { label: 'Response preview', details: textPreview(body) }
@@ -410,12 +480,15 @@ test.describe.serial('authorized lab security automation', () => {
       const looksLikeListing = /acquisitions|legal|package|incident|quarantine/i.test(body);
       audit.add({
         id: 'API-002',
-        title: looksLikeListing ? 'Exposed file listing endpoint is reachable' : 'FTP-style endpoint is reachable',
+        title: looksLikeListing
+          ? 'Exposed file listing endpoint is reachable'
+          : 'FTP-style endpoint is reachable',
         severity: looksLikeListing ? 'Medium' : 'Low',
         category: 'Sensitive File Exposure',
         status: 'observed',
         description: 'The /ftp endpoint returned content to an unauthenticated request.',
-        impact: 'Directory-style file exposure can disclose documents, backups, or metadata useful for later attacks.',
+        impact:
+          'Directory-style file exposure can disclose documents, backups, or metadata useful for later attacks.',
         remediation: 'Disable public directory listings and require authorization for downloadable files.',
         evidence: [
           { label: 'Endpoint', details: ftpUrl.toString() },
@@ -445,11 +518,14 @@ test.describe.serial('authorized lab security automation', () => {
     const quoteProbeResponse = await request.get(quoteProbeUrl.toString());
     const quoteProbeBody = await quoteProbeResponse.text();
     const errorLeakObserved =
-      quoteProbeResponse.status() >= 500 || /sql|sqlite|sequelize|syntax|stack trace|exception/i.test(quoteProbeBody);
+      quoteProbeResponse.status() >= 500 ||
+      /sql|sqlite|sequelize|syntax|stack trace|exception/i.test(quoteProbeBody);
 
     audit.add({
       id: 'API-003',
-      title: errorLeakObserved ? 'Search API returned error details to a quote probe' : 'Search API quote probe handled cleanly',
+      title: errorLeakObserved
+        ? 'Search API returned error details to a quote probe'
+        : 'Search API quote probe handled cleanly',
       severity: errorLeakObserved ? 'Medium' : 'Info',
       category: 'Input Handling',
       status: errorLeakObserved ? 'observed' : 'not-observed',
@@ -491,17 +567,23 @@ test.describe.serial('authorized lab security automation', () => {
 
     audit.add({
       id: 'API-004',
-      title: exposedPaths.length > 0 ? 'Potentially sensitive public paths responded successfully' : 'Sensitive path spot-checks did not expose content',
+      title:
+        exposedPaths.length > 0
+          ? 'Potentially sensitive public paths responded successfully'
+          : 'Sensitive path spot-checks did not expose content',
       severity: exposedPaths.length > 0 ? 'Medium' : 'Info',
       category: 'Sensitive File Exposure',
       status: exposedPaths.length > 0 ? 'manual-review' : 'not-observed',
-      description: 'A short allowlisted set of common sensitive paths was requested with unauthenticated GET requests.',
-      impact: exposedPaths.length > 0
-        ? 'Public configuration, backup, or API documentation endpoints can accelerate attack planning.'
-        : 'No sensitive content was observed from this limited spot-check.',
-      remediation: exposedPaths.length > 0
-        ? 'Remove public access to sensitive files and require authentication for internal documentation.'
-        : 'Keep sensitive files outside the web root and block accidental publication in CI/CD.',
+      description:
+        'A short allowlisted set of common sensitive paths was requested with unauthenticated GET requests.',
+      impact:
+        exposedPaths.length > 0
+          ? 'Public configuration, backup, or API documentation endpoints can accelerate attack planning.'
+          : 'No sensitive content was observed from this limited spot-check.',
+      remediation:
+        exposedPaths.length > 0
+          ? 'Remove public access to sensitive files and require authentication for internal documentation.'
+          : 'Keep sensitive files outside the web root and block accidental publication in CI/CD.',
       evidence: [
         { label: 'Exposed candidates', details: exposedPaths.join(', ') || 'none observed' },
         { label: 'Public metadata', details: publicMetadataPaths.join(', ') || 'none observed' },
@@ -515,21 +597,27 @@ test.describe.serial('authorized lab security automation', () => {
       failOnStatusCode: false,
       timeout: 8_000
     });
-    const allowHeader = optionsResponse.headers().allow ?? optionsResponse.headers()['access-control-allow-methods'];
+    const allowHeader =
+      optionsResponse.headers().allow ?? optionsResponse.headers()['access-control-allow-methods'];
     const riskyMethods = allowHeader?.match(/\b(PUT|DELETE|TRACE|CONNECT)\b/gi) ?? [];
     audit.add({
       id: 'API-005',
-      title: riskyMethods.length > 0 ? 'Potentially risky HTTP methods advertised' : 'HTTP method advertisement reviewed',
+      title:
+        riskyMethods.length > 0
+          ? 'Potentially risky HTTP methods advertised'
+          : 'HTTP method advertisement reviewed',
       severity: riskyMethods.length > 0 ? 'Low' : 'Info',
       category: 'API Surface',
       status: riskyMethods.length > 0 ? 'manual-review' : 'not-observed',
       description: 'The target was queried with an OPTIONS request to inspect advertised HTTP methods.',
-      impact: riskyMethods.length > 0
-        ? 'Unneeded HTTP methods can expose accidental write, debug, or proxy behavior.'
-        : 'No risky methods were advertised by the sampled OPTIONS response.',
-      remediation: riskyMethods.length > 0
-        ? 'Disable methods that are not required by the application and enforce method allowlists at the edge.'
-        : 'Keep method allowlists explicit at the reverse proxy or application routing layer.',
+      impact:
+        riskyMethods.length > 0
+          ? 'Unneeded HTTP methods can expose accidental write, debug, or proxy behavior.'
+          : 'No risky methods were advertised by the sampled OPTIONS response.',
+      remediation:
+        riskyMethods.length > 0
+          ? 'Disable methods that are not required by the application and enforce method allowlists at the edge.'
+          : 'Keep method allowlists explicit at the reverse proxy or application routing layer.',
       evidence: [
         { label: 'HTTP status', details: String(optionsResponse.status()) },
         { label: 'Allow / AC-Allow-Methods', details: allowHeader ?? 'missing' }
@@ -579,8 +667,10 @@ test.describe.serial('authorized lab security automation', () => {
     const notFoundUrl = new URL(`/definitely-not-real-${Date.now()}`, targetUrl);
     const response = await request.get(notFoundUrl.toString(), { failOnStatusCode: false, timeout: 10_000 });
     const body = await response.text().catch(() => '');
-    const verboseErrorObserved = response.status() >= 500 || /stack trace|exception|sequelize|sqlite|syntaxerror|traceback/i.test(body);
-    const spaFallbackObserved = response.ok() && isLikelySpaFallback(response.headers()['content-type'] ?? '', body);
+    const verboseErrorObserved =
+      response.status() >= 500 || /stack trace|exception|sequelize|sqlite|syntaxerror|traceback/i.test(body);
+    const spaFallbackObserved =
+      response.ok() && isLikelySpaFallback(response.headers()['content-type'] ?? '', body);
 
     audit.add({
       id: 'ERR-001',
@@ -613,7 +703,10 @@ test.describe.serial('authorized lab security automation', () => {
     const sampledPolicies: string[] = [];
     for (const pathName of sampledCachePaths) {
       const cacheUrl = new URL(pathName, targetUrl);
-      const cacheResponse = await request.get(cacheUrl.toString(), { failOnStatusCode: false, timeout: 8_000 });
+      const cacheResponse = await request.get(cacheUrl.toString(), {
+        failOnStatusCode: false,
+        timeout: 8_000
+      });
       const cacheControl = cacheResponse.headers()['cache-control'] ?? '';
       sampledPolicies.push(`${pathName}:${cacheControl || 'missing'}`);
 
@@ -624,13 +717,19 @@ test.describe.serial('authorized lab security automation', () => {
 
     audit.add({
       id: 'HDR-009',
-      title: missingCachePolicy.length > 0 ? 'Sampled responses missing explicit cache policy' : 'Sampled response cache policies reviewed',
+      title:
+        missingCachePolicy.length > 0
+          ? 'Sampled responses missing explicit cache policy'
+          : 'Sampled response cache policies reviewed',
       severity: missingCachePolicy.length > 0 ? 'Low' : 'Info',
       category: 'Header Hardening',
       status: missingCachePolicy.length > 0 ? 'manual-review' : 'not-observed',
-      description: 'A small set of application and API responses was checked for explicit Cache-Control behavior.',
-      impact: 'Responses without explicit cache policy can be stored unexpectedly by browsers or intermediary caches.',
-      remediation: 'Set explicit cache policy by content type and sensitivity, using no-store for sensitive responses.',
+      description:
+        'A small set of application and API responses was checked for explicit Cache-Control behavior.',
+      impact:
+        'Responses without explicit cache policy can be stored unexpectedly by browsers or intermediary caches.',
+      remediation:
+        'Set explicit cache policy by content type and sensitivity, using no-store for sensitive responses.',
       evidence: [
         { label: 'Missing explicit policy', details: missingCachePolicy.join(', ') || 'none observed' },
         { label: 'Sampled policies', details: sampledPolicies.join(' | ') }
@@ -672,7 +771,10 @@ test.describe.serial('authorized lab security automation', () => {
     ]);
 
     await page.waitForTimeout(1_500);
-    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const bodyText = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '');
     const authEvidence = await screenshotEvidence(page, '02-negative-login');
 
     audit.add({
@@ -681,7 +783,8 @@ test.describe.serial('authorized lab security automation', () => {
       severity: emailFilled && passwordFilled && submitClicked ? 'Info' : 'Low',
       category: 'Authentication',
       status: emailFilled && passwordFilled && submitClicked ? 'observed' : 'manual-review',
-      description: 'Playwright attempted a login with a non-existent demo user and captured the resulting page state.',
+      description:
+        'Playwright attempted a login with a non-existent demo user and captured the resulting page state.',
       impact:
         'Automating negative auth flows provides regression coverage for login behavior and creates evidence for manual review.',
       remediation:
@@ -707,17 +810,23 @@ test.describe.serial('authorized lab security automation', () => {
     await closeJuiceShopOverlays(page);
     await page.waitForTimeout(2_000);
 
-    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const bodyText = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '');
     const reflected = bodyText.includes(marker);
     const searchEvidence = await screenshotEvidence(page, '03-search-reflection');
 
     audit.add({
       id: 'INP-001',
-      title: reflected ? 'Search marker reflected in the browser UI' : 'Search marker was not reflected in visible text',
+      title: reflected
+        ? 'Search marker reflected in the browser UI'
+        : 'Search marker was not reflected in visible text',
       severity: reflected ? 'Low' : 'Info',
       category: 'Input Handling',
       status: reflected ? 'observed' : 'not-observed',
-      description: 'A harmless unique marker was submitted through the search route and checked in rendered page text.',
+      description:
+        'A harmless unique marker was submitted through the search route and checked in rendered page text.',
       impact: reflected
         ? 'Reflected input should be manually reviewed for context-aware output encoding and script execution controls.'
         : 'No visible reflection was observed from this safe marker check.',
@@ -742,7 +851,10 @@ test.describe.serial('authorized lab security automation', () => {
       await page.waitForTimeout(1_500);
 
       const currentUrl = page.url();
-      const bodyText = await page.locator('body').innerText().catch(() => '');
+      const bodyText = await page
+        .locator('body')
+        .innerText()
+        .catch(() => '');
       const blockedByLogin =
         /login|email|password/i.test(currentUrl) ||
         /please log in|not authorized|unauthorized|not allowed|forbidden|\b403\b|login/i.test(bodyText);
@@ -806,7 +918,9 @@ function isSensitivePathExposure(pathName: string, response: APIResponse, body: 
   }
 
   if (pathName === '/config.json') {
-    return /json/i.test(contentType) || /"?(password|secret|token|apiKey|database|admin|jwt)"?\s*:/i.test(body);
+    return (
+      /json/i.test(contentType) || /"?(password|secret|token|apiKey|database|admin|jwt)"?\s*:/i.test(body)
+    );
   }
 
   if (pathName === '/backup.zip') {
@@ -821,11 +935,17 @@ function isSensitivePathExposure(pathName: string, response: APIResponse, body: 
 }
 
 function isLikelySpaFallback(contentType: string, body: string): boolean {
-  return /text\/html/i.test(contentType) && /<app-root|OWASP Juice Shop|main\.[a-z0-9]+\.js|polyfills\.[a-z0-9]+\.js/i.test(body);
+  return (
+    /text\/html/i.test(contentType) &&
+    /<app-root|OWASP Juice Shop|main\.[a-z0-9]+\.js|polyfills\.[a-z0-9]+\.js/i.test(body)
+  );
 }
 
 function isAccessBlocked(status: number, body: string): boolean {
-  return [401, 403, 404].includes(status) || /not authorized|unauthorized|forbidden|not allowed|please log in|\b403\b/i.test(body);
+  return (
+    [401, 403, 404].includes(status) ||
+    /not authorized|unauthorized|forbidden|not allowed|please log in|\b403\b/i.test(body)
+  );
 }
 
 function urlPath(input: string): string {
@@ -840,7 +960,7 @@ function urlPath(input: string): string {
 async function waitForTarget(
   request: APIRequestContext,
   url: string,
-  timeoutMs = 120_000,
+  timeoutMs = 20_000,
   intervalMs = 2_000
 ): Promise<APIResponse> {
   const startedAt = Date.now();
@@ -869,7 +989,9 @@ async function waitForTarget(
     return lastResponse;
   }
 
-  throw lastError instanceof Error ? lastError : new Error(`Target did not become reachable within ${timeoutMs}ms`);
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Target did not become reachable within ${timeoutMs}ms`);
 }
 
 async function screenshotEvidence(page: Page, name: string): Promise<Evidence> {

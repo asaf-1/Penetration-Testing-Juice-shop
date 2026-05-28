@@ -3,21 +3,56 @@
   "version": "1.0.0",
   "private": true,
   "description": "Playwright automation project for a legal OWASP Juice Shop security testing demo.",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "playwright test",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "coverage": "vitest run --coverage",
     "audit": "playwright test tests/juice-shop-security.spec.ts",
     "audit:headed": "playwright test tests/juice-shop-security.spec.ts --headed",
+    "audit:gate": "node scripts/check-findings.mjs",
+    "audit:summary": "node scripts/report-summary.mjs",
     "docker:audit": "node scripts/prepare-artifacts.mjs && docker compose up --build --abort-on-container-exit --exit-code-from audit audit",
     "docker:down": "docker compose down --remove-orphans",
     "lab": "node scripts/local-lab.mjs",
     "juice-shop:docker": "docker run --rm -p 3000:3000 bkimminich/juice-shop",
     "report": "playwright show-report",
     "setup:browsers": "playwright install chromium",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test:unit",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,mjs,js}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "1.60.0",
     "@types/node": "24.12.4",
-    "typescript": "5.9.3"
+    "@vitest/coverage-v8": "^4.1.7",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "eslint": "^10.4.0",
+    "eslint-config-prettier": "9.1.0",
+    "globals": "^17.6.0",
+    "husky": "9.1.7",
+    "lint-staged": "^17.0.5",
+    "prettier": "3.4.2",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.60.0",
+    "vitest": "^4.1.7"
   }
 }

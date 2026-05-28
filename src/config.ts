@@ -15,4 +15,3 @@ export function loadAuditConfig(): AuditConfig {
     evidenceDir: path.join(reportsDir, 'evidence')
   };
 }
-

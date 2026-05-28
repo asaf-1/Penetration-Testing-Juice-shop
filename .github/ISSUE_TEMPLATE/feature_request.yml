@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a new check or capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What gap or use case does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the check or feature. New checks must be non-destructive.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: This proposal stays within the project's non-destructive safety model.
+          required: true
