@@ -1,0 +1,6 @@
+# Normalize line endings to LF in the repo and on checkout so Prettier
+# (endOfLine: lf) and CI behave consistently across Windows/macOS/Linux.
+* text=auto eol=lf
+
+# Generated lockfile — keep as-is, don't diff-explode.
+package-lock.json -diff

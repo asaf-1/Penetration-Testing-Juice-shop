@@ -128,8 +128,12 @@ function locationForFinding(finding: Finding, targetUrl: string): string {
   const candidate = urlLike ?? targetUrl;
   try {
     const url = new URL(candidate, targetUrl);
+    // GitHub code scanning treats the artifact URI as a repo-relative path and
+    // rejects anything that parses as a URI scheme. "host:port" would be read as
+    // a scheme, so replace the colon to keep a clean, scheme-free relative path.
+    const host = url.host.replace(/:/g, '_');
     const path = `${url.pathname}${url.search}`;
-    return path === '/' || path === '' ? url.host : `${url.host}${path}`;
+    return path === '/' || path === '' ? host : `${host}${path}`;
   } catch {
     return candidate;
   }

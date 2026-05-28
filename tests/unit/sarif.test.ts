@@ -64,7 +64,7 @@ describe('toSarif', () => {
       results: Array<{ locations: Array<{ physicalLocation: { artifactLocation: { uri: string } } }> }>;
     };
     const uri = run.results[0]!.locations[0]!.physicalLocation.artifactLocation.uri;
-    expect(uri).toBe('juice-shop:3000/rest/products/search?q=apple');
+    expect(uri).toBe('juice-shop_3000/rest/products/search?q=apple');
   });
 
   it('falls back to the target host when no endpoint evidence is present', () => {
@@ -72,7 +72,7 @@ describe('toSarif', () => {
     const run = sarif.runs[0] as {
       results: Array<{ locations: Array<{ physicalLocation: { artifactLocation: { uri: string } } }> }>;
     };
-    expect(run.results[0]!.locations[0]!.physicalLocation.artifactLocation.uri).toBe('juice-shop:3000');
+    expect(run.results[0]!.locations[0]!.physicalLocation.artifactLocation.uri).toBe('juice-shop_3000');
   });
 
   it('returns the raw candidate when the location cannot be parsed as a URL', () => {
