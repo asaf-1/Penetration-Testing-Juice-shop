@@ -41,17 +41,17 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "1.60.0",
-    "@types/node": "24.12.4",
+    "@types/node": "25.9.1",
     "@vitest/coverage-v8": "^4.1.7",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "eslint": "^10.4.0",
-    "eslint-config-prettier": "9.1.0",
+    "eslint-config-prettier": "10.1.8",
     "globals": "^17.6.0",
     "husky": "9.1.7",
     "lint-staged": "^17.0.5",
-    "prettier": "3.4.2",
-    "typescript": "5.9.3",
+    "prettier": "3.8.3",
+    "typescript": "6.0.3",
     "typescript-eslint": "^8.60.0",
     "vitest": "^4.1.7"
   }
