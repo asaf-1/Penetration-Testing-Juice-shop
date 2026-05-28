@@ -1,5 +1,5 @@
 import type { BrowserContext } from '@playwright/test';
-import type { Finding, Severity } from './audit-report';
+import type { Finding, Severity } from './findings';
 
 export interface HeaderRule {
   id: string;
@@ -25,8 +25,10 @@ export const headerRules: HeaderRule[] = [
     header: 'content-security-policy',
     severity: 'Medium',
     title: 'Content-Security-Policy header is missing',
-    impact: 'If an injection bug exists, the browser has fewer policy-level controls to reduce script execution impact.',
-    remediation: 'Deploy a restrictive Content-Security-Policy and tune it with report-only mode before enforcing it in production.'
+    impact:
+      'If an injection bug exists, the browser has fewer policy-level controls to reduce script execution impact.',
+    remediation:
+      'Deploy a restrictive Content-Security-Policy and tune it with report-only mode before enforcing it in production.'
   },
   {
     id: 'HDR-002',
@@ -35,7 +37,8 @@ export const headerRules: HeaderRule[] = [
     severity: 'Low',
     title: 'Clickjacking protection header is missing',
     impact: 'The application may be framed by another site unless frame restrictions are enforced elsewhere.',
-    remediation: 'Set CSP frame-ancestors or X-Frame-Options according to the application framing requirements.'
+    remediation:
+      'Set CSP frame-ancestors or X-Frame-Options according to the application framing requirements.'
   },
   {
     id: 'HDR-003',
@@ -50,7 +53,8 @@ export const headerRules: HeaderRule[] = [
     header: 'permissions-policy',
     severity: 'Info',
     title: 'Permissions-Policy header is missing',
-    impact: 'Browser features such as camera, microphone, and geolocation are not centrally restricted by policy.',
+    impact:
+      'Browser features such as camera, microphone, and geolocation are not centrally restricted by policy.',
     remediation: 'Set Permissions-Policy to explicitly disable browser features the app does not use.'
   },
   {
@@ -59,7 +63,8 @@ export const headerRules: HeaderRule[] = [
     severity: 'Medium',
     title: 'HTTP Strict Transport Security header is missing',
     impact: 'Browsers are not instructed to require HTTPS on future visits.',
-    remediation: 'Serve the application over HTTPS and set Strict-Transport-Security with an appropriate max-age.',
+    remediation:
+      'Serve the application over HTTPS and set Strict-Transport-Security with an appropriate max-age.',
     httpsOnly: true
   }
 ];
@@ -120,7 +125,11 @@ export const unauthenticatedApiChecks: ApiAuthorizationCheck[] = [
   }
 ];
 
-export function missingHeaderFinding(headers: Record<string, string>, rule: HeaderRule, targetUrl: string): Finding | null {
+export function missingHeaderFinding(
+  headers: Record<string, string>,
+  rule: HeaderRule,
+  targetUrl: string
+): Finding | null {
   if (rule.httpsOnly && new URL(targetUrl).protocol !== 'https:') {
     return null;
   }
@@ -158,9 +167,12 @@ export function corsFinding(headers: Record<string, string>): Finding | null {
       severity: 'High',
       category: 'Header Hardening',
       status: 'observed',
-      description: 'The response combines a wildcard Access-Control-Allow-Origin value with credentialed requests.',
-      impact: 'A hostile origin could read authenticated responses if browsers accepted this policy combination.',
-      remediation: 'Use an explicit allowlist of trusted origins and avoid credentialed wildcard CORS policies.',
+      description:
+        'The response combines a wildcard Access-Control-Allow-Origin value with credentialed requests.',
+      impact:
+        'A hostile origin could read authenticated responses if browsers accepted this policy combination.',
+      remediation:
+        'Use an explicit allowlist of trusted origins and avoid credentialed wildcard CORS policies.',
       evidence: [
         { label: 'Access-Control-Allow-Origin', details: allowOrigin },
         { label: 'Access-Control-Allow-Credentials', details: allowCredentials }
@@ -199,7 +211,8 @@ export async function cookieFindings(context: BrowserContext, targetUrl: string)
         status: 'not-observed',
         description: 'No cookies were set during the unauthenticated browser flow.',
         impact: 'No cookie flag issues can be evaluated until a session cookie is issued.',
-        remediation: 'When authenticated flows are added, assert HttpOnly, Secure over HTTPS, and SameSite on session cookies.',
+        remediation:
+          'When authenticated flows are added, assert HttpOnly, Secure over HTTPS, and SameSite on session cookies.',
         evidence: [{ label: 'Cookie count', details: '0' }]
       }
     ];
@@ -209,7 +222,9 @@ export async function cookieFindings(context: BrowserContext, targetUrl: string)
   const missingHttpOnly = cookies.filter((cookie) => !cookie.httpOnly).map((cookie) => cookie.name);
   const missingSameSite = cookies.filter((cookie) => cookie.sameSite === 'None').map((cookie) => cookie.name);
   const isHttps = new URL(targetUrl).protocol === 'https:';
-  const missingSecure = isHttps ? cookies.filter((cookie) => !cookie.secure).map((cookie) => cookie.name) : [];
+  const missingSecure = isHttps
+    ? cookies.filter((cookie) => !cookie.secure).map((cookie) => cookie.name)
+    : [];
 
   if (missingHttpOnly.length > 0) {
     findings.push({
@@ -247,8 +262,10 @@ export async function cookieFindings(context: BrowserContext, targetUrl: string)
       category: 'Session Management',
       status: 'manual-review',
       description: 'One or more cookies use SameSite=None.',
-      impact: 'Cross-site cookie sending can increase CSRF exposure if state-changing endpoints lack CSRF controls.',
-      remediation: 'Use SameSite=Lax or Strict where possible and require CSRF tokens for state-changing requests.',
+      impact:
+        'Cross-site cookie sending can increase CSRF exposure if state-changing endpoints lack CSRF controls.',
+      remediation:
+        'Use SameSite=Lax or Strict where possible and require CSRF tokens for state-changing requests.',
       evidence: [{ label: 'Cookie names', details: missingSameSite.join(', ') }]
     });
   }

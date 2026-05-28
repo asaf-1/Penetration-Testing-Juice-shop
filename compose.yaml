@@ -4,7 +4,7 @@ services:
   juice-shop:
     image: ${JUICE_SHOP_IMAGE:-bkimminich/juice-shop:latest}
     expose:
-      - "3000"
+      - '3000'
     networks:
       - lab
     security_opt:
@@ -23,7 +23,7 @@ services:
       REPORTS_DIR: /work/reports
       PLAYWRIGHT_HTML_REPORT: /work/playwright-report
       PLAYWRIGHT_TEST_RESULTS: /tmp/test-results
-      CI: "true"
+      CI: 'true'
     volumes:
       - ./reports:/work/reports
       - ./playwright-report:/work/playwright-report

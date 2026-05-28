@@ -35,4 +35,3 @@ OWASP Juice Shop is intentionally vulnerable. Running it inside Docker keeps the
 - Do not point `TARGET_URL` at public systems without explicit permission.
 - Prefer `npm.cmd run docker:audit` for repeatable interview demos.
 - Delete `reports/`, `test-results/`, and `playwright-report/` if you want to clear local artifacts.
-

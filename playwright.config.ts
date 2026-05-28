@@ -5,6 +5,9 @@ const auditConfig = loadAuditConfig();
 
 export default defineConfig({
   testDir: './tests',
+  // Only the end-to-end security specs are Playwright tests. Unit tests under
+  // tests/unit/*.test.ts belong to Vitest and must be excluded here.
+  testMatch: '**/*.spec.ts',
   outputDir: process.env.PLAYWRIGHT_TEST_RESULTS ?? 'test-results',
   timeout: 45_000,
   expect: {
@@ -15,7 +18,8 @@ export default defineConfig({
   retries: 0,
   reporter: [
     ['list'],
-    ['html', { outputFolder: process.env.PLAYWRIGHT_HTML_REPORT ?? 'playwright-report', open: 'never' }]
+    ['html', { outputFolder: process.env.PLAYWRIGHT_HTML_REPORT ?? 'playwright-report', open: 'never' }],
+    ['./src/reporters/security-reporter.ts']
   ],
   use: {
     baseURL: auditConfig.targetUrl,

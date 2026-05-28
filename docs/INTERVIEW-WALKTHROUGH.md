@@ -33,4 +33,3 @@ npm.cmd run report
 - Add OWASP ZAP passive scanning as a separate Docker service.
 - Add GitHub Actions to run typecheck and local lab tests.
 - Add a SARIF exporter for security tooling integrations.
-

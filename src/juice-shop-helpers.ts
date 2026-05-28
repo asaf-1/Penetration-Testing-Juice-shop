@@ -1,3 +1,4 @@
+/* eslint-disable no-control-regex -- sanitizeDetail intentionally matches and strips control characters. */
 import type { Locator, Page } from '@playwright/test';
 
 type LocatorFactory = (page: Page) => Locator;
@@ -9,6 +10,7 @@ export function hashRouteUrl(baseUrl: string, hashRoute: string): string {
   return url.toString();
 }
 
+/* v8 ignore start -- browser-driving helpers below require a live Playwright Page; they are exercised by the end-to-end audit, not unit tests. */
 export async function closeJuiceShopOverlays(page: Page): Promise<void> {
   const candidates: LocatorFactory[] = [
     (targetPage) => targetPage.getByLabel(/close welcome banner/i),
@@ -63,6 +65,7 @@ export async function tryClick(page: Page, candidates: LocatorFactory[]): Promis
 
   return false;
 }
+/* v8 ignore stop */
 
 export function textPreview(input: string, maxLength = 600): string {
   return sanitizeDetail(input, maxLength).replace(/\s+/g, ' ').trim().slice(0, maxLength);

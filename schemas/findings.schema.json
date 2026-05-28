@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/asaf-1/Penetration-Testing-Juice-shop/schemas/findings.schema.json",
+  "title": "Security Audit Findings Report",
+  "description": "Structured output written to reports/findings.json by the audit reporter.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["targetUrl", "generatedAt", "findingCount", "findings"],
+  "properties": {
+    "targetUrl": {
+      "type": "string",
+      "description": "The audited target origin."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp of the run."
+    },
+    "findingCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": ["Critical", "High", "Medium", "Low", "Info"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["observed", "not-observed", "manual-review"]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label"],
+      "properties": {
+        "label": { "type": "string" },
+        "details": { "type": "string" },
+        "path": {
+          "type": "string",
+          "description": "Report-relative path to an artifact such as a screenshot."
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "severity",
+        "category",
+        "status",
+        "description",
+        "impact",
+        "remediation",
+        "evidence"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "severity": { "$ref": "#/$defs/severity" },
+        "category": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/status" },
+        "description": { "type": "string" },
+        "impact": { "type": "string" },
+        "remediation": { "type": "string" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence" }
+        },
+        "references": {
+          "type": "array",
+          "items": { "type": "string", "format": "uri" }
+        }
+      }
+    }
+  }
+}

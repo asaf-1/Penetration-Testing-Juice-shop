@@ -15,7 +15,7 @@ const server = createServer((request, response) => {
 
     if (query.includes("'")) {
       sendJson(response, 500, {
-        error: "SQLITE_ERROR: near \"'\": syntax error",
+        error: 'SQLITE_ERROR: near "\'": syntax error',
         detail: 'Simulated lab error for safe input-handling automation.'
       });
       return;
