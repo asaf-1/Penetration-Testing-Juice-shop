@@ -67,6 +67,9 @@ jobs:
     name: Isolated DAST Audit (OWASP Juice Shop)
     runs-on: ubuntu-latest
     needs: quality
+    # Skip the heavy DAST job on Dependabot PRs: they run with a restricted
+    # token (no security-events: write), so SARIF upload would fail and email.
+    if: github.actor != 'dependabot[bot]'
     permissions:
       contents: read
       # Required to publish SARIF results to the Security tab.
