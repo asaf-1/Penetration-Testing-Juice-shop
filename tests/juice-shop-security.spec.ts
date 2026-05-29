@@ -160,18 +160,30 @@ test.describe.serial('authorized lab security automation', () => {
     }
 
     const serverHeader = headers.server;
-    if (serverHeader) {
+    const poweredByHeader = headers['x-powered-by'];
+    if (serverHeader || poweredByHeader) {
+      const banners = [serverHeader, poweredByHeader].filter(Boolean) as string[];
+      const versionDisclosed = banners.some((value) => /\d+\.\d+/.test(value));
       audit.add({
         id: 'HDR-005',
-        title: 'Server banner is exposed',
-        severity: 'Info',
+        title: versionDisclosed
+          ? 'Server/technology banner discloses version details'
+          : 'Server/technology banner is exposed',
+        severity: versionDisclosed ? 'Low' : 'Info',
         category: 'Header Hardening',
         status: 'observed',
-        description: 'The HTTP response includes a Server header.',
-        impact: 'Technology hints can help attackers tune follow-up research and payloads.',
+        description:
+          'The HTTP response advertises server or framework details via the Server / X-Powered-By headers.',
+        impact: versionDisclosed
+          ? 'Exact version banners let attackers map the stack to known CVEs and tune exploits directly.'
+          : 'Technology hints can help attackers tune follow-up research and payloads.',
         remediation:
-          'Minimize or normalize server banner details at the reverse proxy or application server.',
-        evidence: [{ label: 'Server header', details: serverHeader }]
+          'Remove or normalize Server and X-Powered-By banners at the reverse proxy or application server, and never expose exact versions.',
+        evidence: [
+          { label: 'Server header', details: serverHeader ?? 'not present' },
+          { label: 'X-Powered-By header', details: poweredByHeader ?? 'not present' }
+        ],
+        references: ['https://owasp.org/Top10/A05_2021-Security_Misconfiguration/']
       });
     }
 
@@ -625,6 +637,60 @@ test.describe.serial('authorized lab security automation', () => {
     });
   });
 
+  test('file download allowlist and traversal checks', async ({ request }) => {
+    test.skip(!targetReachable, unavailableReason());
+
+    // Baseline: a non-allowlisted extension requested directly should be blocked.
+    const directResponse = await request.get(new URL('/ftp/package.json.bak', targetUrl).toString(), {
+      failOnStatusCode: false,
+      timeout: 8_000
+    });
+    const directBlocked = directResponse.status() === 403 || directResponse.status() === 404;
+
+    // Probe encoded / null-byte variants that try to slip a non-allowlisted file
+    // past the extension check. We record ONLY response status and byte length —
+    // never the file contents — so this stays a safe detection, not exfiltration.
+    const bypassProbes = ['/ftp/package.json.bak%2500.md', '/ftp/package.json.bak%00.md'];
+    const bypasses: string[] = [];
+    const sampledStatuses: string[] = [`/ftp/package.json.bak:${directResponse.status()}`];
+
+    for (const probe of bypassProbes) {
+      const response = await request.get(new URL(probe, targetUrl).toString(), {
+        failOnStatusCode: false,
+        timeout: 8_000
+      });
+      const length = (await response.body().catch(() => Buffer.alloc(0))).length;
+      sampledStatuses.push(`${probe}:${response.status()}`);
+      if (response.ok()) {
+        bypasses.push(`${probe} (HTTP ${response.status()}, ${length} bytes)`);
+      }
+    }
+
+    const bypassObserved = bypasses.length > 0;
+    audit.add({
+      id: 'FILE-001',
+      title: bypassObserved
+        ? 'File-download extension allowlist can be bypassed'
+        : 'File-download extension allowlist held against sampled probes',
+      severity: bypassObserved ? 'High' : directBlocked ? 'Info' : 'Low',
+      category: 'Sensitive File Exposure',
+      status: bypassObserved ? 'observed' : 'not-observed',
+      description:
+        'The /ftp download endpoint was checked for extension-allowlist enforcement and for encoded/null-byte bypass variants. Only response status and byte length were recorded; file contents were never read or stored.',
+      impact: bypassObserved
+        ? 'An allowlist bypass lets an attacker download files the allowlist was meant to protect (backups, source, configuration), enabling further compromise.'
+        : 'No allowlist bypass was observed from the sampled encoded-traversal probes.',
+      remediation:
+        'Decode and canonicalize the full path before validation, reject null bytes and traversal sequences, and enforce the extension allowlist on the canonical name. Serve downloads from a restricted directory.',
+      evidence: [
+        { label: 'Direct non-allowlisted request blocked', details: String(directBlocked) },
+        { label: 'Bypasses observed', details: bypasses.join(', ') || 'none observed' },
+        { label: 'Sampled statuses', details: sampledStatuses.join(', ') }
+      ],
+      references: ['https://owasp.org/Top10/A01_2021-Broken_Access_Control/']
+    });
+  });
+
   test('direct unauthenticated API authorization checks', async ({ request }) => {
     test.skip(!targetReachable, unavailableReason());
 
@@ -800,6 +866,214 @@ test.describe.serial('authorized lab security automation', () => {
     });
   });
 
+  test('authentication token hygiene checks', async ({ request }) => {
+    test.skip(!targetReachable, unavailableReason());
+
+    // Register and log in a throwaway account on the local lab so we can inspect a
+    // real issued token. The token is only base64-decoded and inspected here — it
+    // is never verified, modified, forged, or replayed.
+    const email = `pwt-token-${Date.now()}@example.test`;
+    const password = 'NotARealPassword123!';
+    const session = await registerAndLogin(request, targetUrl, email, password);
+    const token = session.token;
+
+    if (!token) {
+      audit.add({
+        id: 'AUTH-TOKEN-001',
+        title: 'Authentication token could not be obtained for inspection',
+        severity: 'Info',
+        category: 'Authentication',
+        status: 'manual-review',
+        description:
+          'The audit attempted to register and log in a throwaway account to inspect the issued token, but no token was returned.',
+        impact: 'Token hygiene could not be evaluated automatically in this run.',
+        remediation:
+          'Confirm the registration/login flow, or provide dedicated test credentials so token hygiene can be assessed.',
+        evidence: [
+          { label: 'Register status', details: String(session.registerStatus) },
+          { label: 'Login status', details: String(session.loginStatus) }
+        ]
+      });
+      return;
+    }
+
+    const decoded = decodeJwt(token);
+    const payload: Record<string, unknown> = decoded?.payload ?? {};
+    const alg = decoded?.header?.alg ? String(decoded.header.alg) : 'unknown';
+    const weakAlg = /^none$/i.test(alg);
+    const hasExpiry = typeof payload.exp === 'number';
+    const lifetimeSeconds =
+      typeof payload.exp === 'number' && typeof payload.iat === 'number' ? payload.exp - payload.iat : null;
+    const dataObject: Record<string, unknown> =
+      payload.data && typeof payload.data === 'object' ? (payload.data as Record<string, unknown>) : {};
+    // List claim KEYS only — never values — so a real password hash is never written to the report.
+    const claimKeys = [...Object.keys(payload), ...Object.keys(dataObject).map((key) => `data.${key}`)];
+    const sensitiveInPayload = /password|hash|totpsecret|"?role"?/i.test(JSON.stringify(payload));
+
+    const issues: string[] = [];
+    if (weakAlg) issues.push('accepts the "none" algorithm');
+    if (!hasExpiry) issues.push('no expiry (exp) claim');
+    if (lifetimeSeconds !== null && lifetimeSeconds > 6 * 60 * 60) issues.push('long token lifetime');
+    if (sensitiveInPayload) issues.push('sensitive user fields embedded in payload');
+
+    const severity = weakAlg || sensitiveInPayload ? 'Medium' : issues.length > 0 ? 'Low' : 'Info';
+
+    audit.add({
+      id: 'AUTH-TOKEN-002',
+      title:
+        issues.length > 0
+          ? 'Authentication token hygiene issues observed'
+          : 'Authentication token hygiene looks acceptable',
+      severity,
+      category: 'Authentication',
+      status: issues.length > 0 ? 'observed' : 'not-observed',
+      description:
+        'A token issued to a throwaway account was base64-decoded (not verified or modified) and inspected for signing algorithm, expiry, and sensitive payload contents.',
+      impact:
+        issues.length > 0
+          ? 'Weak algorithms, missing/long expiry, or sensitive data inside a client-held token increase the impact of token theft or forgery.'
+          : 'No baseline token hygiene problems were observed for the issued token.',
+      remediation:
+        'Sign tokens with a strong algorithm and reject "none", keep expiries short, and never embed secrets such as password hashes in client-held tokens.',
+      evidence: [
+        { label: 'Algorithm', details: alg },
+        { label: 'Has expiry', details: String(hasExpiry) },
+        {
+          label: 'Token lifetime (s)',
+          details: lifetimeSeconds === null ? 'unknown' : String(lifetimeSeconds)
+        },
+        { label: 'Sensitive fields in payload', details: String(sensitiveInPayload) },
+        { label: 'Payload claim keys', details: claimKeys.join(', ') || 'none' },
+        { label: 'Issues', details: issues.join('; ') || 'none observed' }
+      ],
+      references: ['https://owasp.org/Top10/A02_2021-Cryptographic_Failures/']
+    });
+  });
+
+  test('login rate limiting and lockout checks', async ({ request }) => {
+    test.skip(!targetReachable, unavailableReason());
+
+    // Send a small, bounded burst of failed logins for one throwaway identity to
+    // observe whether the endpoint throttles or locks out repeated failures.
+    const loginUrl = new URL('/rest/user/login', targetUrl).toString();
+    const victimEmail = `pwt-lockout-${Date.now()}@example.test`;
+    const attempts = 12;
+    const statuses: number[] = [];
+    let throttled = false;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const response = await request.post(loginUrl, {
+        data: { email: victimEmail, password: `wrong-password-${attempt}` },
+        failOnStatusCode: false,
+        timeout: 10_000
+      });
+      statuses.push(response.status());
+      if (response.status() === 429) {
+        throttled = true;
+        break;
+      }
+    }
+
+    audit.add({
+      id: 'AUTH-RL-001',
+      title: throttled
+        ? 'Login endpoint throttled repeated failures'
+        : 'Login endpoint did not throttle repeated failures',
+      severity: throttled ? 'Info' : 'Medium',
+      category: 'Authentication',
+      status: throttled ? 'not-observed' : 'observed',
+      description: `${statuses.length} consecutive failed logins were sent for a single identity to observe rate limiting or lockout behavior.`,
+      impact: throttled
+        ? 'The endpoint returned a throttling response, which reduces brute-force and credential-stuffing exposure.'
+        : 'No throttling or lockout was observed, leaving the login endpoint more exposed to brute-force and credential-stuffing attacks.',
+      remediation:
+        'Apply per-account and per-source rate limiting with backoff or temporary lockout, monitor and alert on repeated failures, and consider CAPTCHA or MFA for sensitive accounts.',
+      evidence: [
+        { label: 'Attempts sent', details: String(statuses.length) },
+        { label: 'Observed statuses', details: statuses.join(', ') },
+        { label: 'Throttling observed (HTTP 429)', details: String(throttled) }
+      ],
+      references: ['https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/']
+    });
+  });
+
+  test('authenticated basket access control (IDOR/BOLA) checks', async ({ request }) => {
+    test.skip(!targetReachable, unavailableReason());
+
+    // Establish one authenticated identity, then read a small, bounded range of
+    // basket ids with that token. A basket whose owner is a DIFFERENT user being
+    // returned to us is broken object-level authorization. Read-only GETs only.
+    const email = `pwt-idor-${Date.now()}@example.test`;
+    const password = 'NotARealPassword123!';
+    const session = await registerAndLogin(request, targetUrl, email, password);
+
+    if (!session.token) {
+      audit.add({
+        id: 'IDOR-001',
+        title: 'Could not establish an authenticated session for access-control testing',
+        severity: 'Info',
+        category: 'Access Control',
+        status: 'manual-review',
+        description:
+          'The audit could not register/log in a throwaway account, so authenticated object-level authorization could not be exercised.',
+        impact: 'Authenticated IDOR/BOLA behavior could not be evaluated automatically in this run.',
+        remediation: 'Verify the registration/login flow, or supply dedicated test credentials.',
+        evidence: [
+          { label: 'Register status', details: String(session.registerStatus) },
+          { label: 'Login status', details: String(session.loginStatus) }
+        ]
+      });
+      return;
+    }
+
+    const authHeaders = { Authorization: `Bearer ${session.token}` };
+    const foreignBaskets: string[] = [];
+    const sampledStatuses: string[] = [];
+
+    for (let basketId = 1; basketId <= 6; basketId += 1) {
+      const response = await request.get(new URL(`/rest/basket/${basketId}`, targetUrl).toString(), {
+        headers: authHeaders,
+        failOnStatusCode: false,
+        timeout: 10_000
+      });
+      sampledStatuses.push(`${basketId}:${response.status()}`);
+      if (!response.ok()) {
+        continue;
+      }
+
+      const body = (await response.json().catch(() => null)) as {
+        data?: { id?: number; UserId?: number };
+      } | null;
+      const ownerId = body?.data?.UserId ?? null;
+      if (ownerId !== null && session.userId !== null && ownerId !== session.userId) {
+        foreignBaskets.push(`basket ${basketId} (owner UserId ${ownerId})`);
+      }
+    }
+
+    const exposed = foreignBaskets.length > 0;
+    audit.add({
+      id: 'IDOR-002',
+      title: exposed
+        ? 'Authenticated user can read baskets belonging to other users'
+        : 'No cross-user basket access observed for the authenticated user',
+      severity: exposed ? 'High' : 'Info',
+      category: 'Access Control',
+      status: exposed ? 'observed' : 'not-observed',
+      description: `Using one authenticated account (UserId ${session.userId ?? 'unknown'}), basket ids 1-6 were requested to check for broken object-level authorization.`,
+      impact: exposed
+        ? 'Broken object-level authorization lets an authenticated user read data belonging to other users by changing an id, a common high-impact access-control flaw.'
+        : 'No cross-user basket records were returned to the authenticated account in this bounded sample.',
+      remediation:
+        'Enforce per-object ownership checks server-side on every record access, not just authentication, and add regression tests for object-level authorization.',
+      evidence: [
+        { label: 'Authenticated as UserId', details: String(session.userId ?? 'unknown') },
+        { label: 'Foreign baskets returned', details: foreignBaskets.join(', ') || 'none observed' },
+        { label: 'Sampled statuses (id:status)', details: sampledStatuses.join(', ') }
+      ],
+      references: ['https://owasp.org/Top10/A01_2021-Broken_Access_Control/']
+    });
+  });
+
   test('safe search input reflection check', async ({ page }) => {
     test.skip(!targetReachable, unavailableReason());
 
@@ -954,6 +1228,76 @@ function urlPath(input: string): string {
     return `${url.pathname}${url.search}`;
   } catch {
     return input;
+  }
+}
+
+interface AuthSession {
+  token: string | null;
+  userId: number | null;
+  registerStatus: number;
+  loginStatus: number;
+}
+
+/**
+ * Register a throwaway account on the lab and log in, returning the issued token
+ * and the user id embedded in its JWT payload. Used by authenticated checks so
+ * the registration/login flow lives in one place.
+ */
+async function registerAndLogin(
+  request: APIRequestContext,
+  baseUrl: string,
+  email: string,
+  password: string
+): Promise<AuthSession> {
+  const registerResponse = await request.post(new URL('/api/Users', baseUrl).toString(), {
+    data: { email, password, passwordRepeat: password },
+    failOnStatusCode: false,
+    timeout: 10_000
+  });
+  const loginResponse = await request.post(new URL('/rest/user/login', baseUrl).toString(), {
+    data: { email, password },
+    failOnStatusCode: false,
+    timeout: 10_000
+  });
+
+  let token: string | null = null;
+  if (loginResponse.ok()) {
+    const loginBody = (await loginResponse.json().catch(() => null)) as {
+      authentication?: { token?: string };
+    } | null;
+    token = loginBody?.authentication?.token ?? null;
+  }
+
+  let userId: number | null = null;
+  if (token) {
+    const data = decodeJwt(token)?.payload?.data;
+    if (data && typeof data === 'object' && typeof (data as Record<string, unknown>).id === 'number') {
+      userId = (data as Record<string, unknown>).id as number;
+    }
+  }
+
+  return {
+    token,
+    userId,
+    registerStatus: registerResponse.status(),
+    loginStatus: loginResponse.status()
+  };
+}
+
+function decodeJwt(
+  token: string
+): { header: Record<string, unknown>; payload: Record<string, unknown> } | null {
+  const [headerPart, payloadPart] = token.split('.');
+  if (!headerPart || !payloadPart) {
+    return null;
+  }
+
+  try {
+    const decodePart = (part: string): Record<string, unknown> =>
+      JSON.parse(Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+    return { header: decodePart(headerPart), payload: decodePart(payloadPart) };
+  } catch {
+    return null;
   }
 }
 
