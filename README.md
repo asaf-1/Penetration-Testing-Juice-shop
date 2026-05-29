@@ -79,11 +79,17 @@ flowchart TB
 
 - Tests only target `TARGET_URL`.
 - The Docker workflow does not expose Juice Shop to your host network by default.
-- The runner uses safe GET, OPTIONS, browser navigation, and negative-login checks.
-- No brute force, malware, destructive requests, credential theft, or filesystem
-  access outside the project artifacts.
-- Use only the included lab, OWASP Juice Shop, or systems where you have explicit
-  written permission. See [docs/SAFETY.md](docs/SAFETY.md) and [SECURITY.md](SECURITY.md).
+- Mostly passive (GET, OPTIONS, browser navigation), plus a few bounded **active**
+  checks against an authorized lab: throwaway-account registration, a fixed
+  failed-login burst, authenticated object-id enumeration, and `/ftp` allowlist
+  probes.
+- No unbounded brute force, no malware, no data modification, no token forgery or
+  replay, no exfiltration of file contents or token values, and no filesystem access
+  outside the project artifacts.
+- ⚠️ There is no in-code target allowlist yet (see
+  [docs/PRODUCTION-READINESS.md](docs/PRODUCTION-READINESS.md), P0). Use only the
+  included lab, OWASP Juice Shop, or systems where you have explicit written
+  permission. See [docs/SAFETY.md](docs/SAFETY.md) and [SECURITY.md](SECURITY.md).
 
 ## Quick start (recommended demo)
 
@@ -164,14 +170,24 @@ npm.cmd run audit:gate
 - Browser form hygiene and external-link `noopener` checks
 - Cookie flag hygiene
 - Public API discovery and direct unauthenticated API authorization checks
-- File listing and sensitive path spot-checks
+- File listing, sensitive path spot-checks, and `/ftp` download-allowlist /
+  null-byte traversal-bypass detection (status and length only — never contents)
 - Static asset, source-map, and client bundle secret-hint checks
 - Safe input handling probes and a negative authentication workflow
+- Authentication token (JWT) hygiene — decode-only inspection of algorithm,
+  expiry, and sensitive payload keys
+- Login rate-limiting / lockout probe (a bounded, fixed failed-login burst)
+- Authenticated basket IDOR/BOLA — read-only object-level authorization check
 - Unauthenticated protected-route checks
 - Generic error handling and HTTP method advertisement review
 
-The suite is intentionally non-destructive: browser navigation, safe GET/OPTIONS
-requests, a single fake negative-login workflow, and harmless input markers.
+The suite is **bounded and non-destructive**. Most checks are passive (browser
+navigation, safe GET/OPTIONS, harmless input markers), and a few are deliberately
+_active_ against an authorized lab: it registers throwaway accounts, sends a fixed
+failed-login burst, enumerates a small object-id range with one authenticated
+session, and probes the `/ftp` allowlist. No data is modified, no file contents or
+token values are recorded, and tokens are never forged or replayed. See
+[docs/SAFETY.md](docs/SAFETY.md) before pointing it at anything.
 
 ## Project structure
 
@@ -199,6 +215,8 @@ scripts/report-summary.mjs    GitHub Actions job-summary generator
 scripts/local-lab.mjs         Tiny local demo target for offline verification
 docs/PROJECT-STRUCTURE.md     Exhaustive guide to every file, folder, and tool
 docs/SAFETY.md                Safety boundaries and operational guidance
+docs/PRODUCTION-READINESS.md  Readiness verdict, ratings, and P0/P1/P2 roadmap
+docs/GITHUB-CLI.md            gh CLI cheat sheet: status, CI, and PR workflow
 ```
 
 > For a file-by-file breakdown of the whole repository (what each file does and
