@@ -125,7 +125,7 @@ test.describe.serial('authorized lab security automation', () => {
 
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
     await closeJuiceShopOverlays(page);
-    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+    await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => undefined);
 
     const homepageEvidence = await screenshotEvidence(page, '01-homepage');
     audit.add({
@@ -218,7 +218,7 @@ test.describe.serial('authorized lab security automation', () => {
 
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
     await closeJuiceShopOverlays(page);
-    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+    await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => undefined);
 
     const inventory = await page.evaluate(() => {
       return {
@@ -265,7 +265,7 @@ test.describe.serial('authorized lab security automation', () => {
 
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
     await closeJuiceShopOverlays(page);
-    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+    await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => undefined);
 
     for (const finding of await cookieFindings(context, targetUrl)) {
       audit.add(finding);
