@@ -80,13 +80,13 @@ application behavior.
   ```ts file=add-valid-todo.spec.ts
   // spec: specs/plan.md
   // seed: tests/seed.spec.ts
+  import { test } from '@playwright/test';
 
   test.describe('Adding New Todos', () => {
-    test('Add Valid Todo', async { page } => {
+    test('Add Valid Todo', async ({ page }) => {
       // 1. Click in the "What needs to be done?" input field
-      await page.click(...);
-
-      ...
+      await page.click('.new-todo');
+      // ...
     });
   });
   ```

@@ -63,8 +63,9 @@ jobs:
       # version (flags evolve). In --print (headless) mode any tool lacking
       # permission is silently skipped, so the healer's tools are allowlisted.
       - name: Run the healer
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # To enable: add an ANTHROPIC_API_KEY repo secret, then uncomment the env block below.
+        # env:
+        #   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           npx --yes @anthropic-ai/claude-code \
             --print "${{ inputs.prompt }}" \
