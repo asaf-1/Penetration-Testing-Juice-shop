@@ -21,6 +21,13 @@ export default defineConfig({
     ['html', { outputFolder: process.env.PLAYWRIGHT_HTML_REPORT ?? 'playwright-report', open: 'never' }],
     ['./src/reporters/security-reporter.ts']
   ],
+  // Start the local lab server automatically when no external TARGET_URL is provided.
+  webServer: {
+    command: 'node scripts/local-lab.mjs',
+    url: 'http://localhost:3000',
+    reuseExistingServer: true,
+    timeout: 30_000
+  },
   use: {
     baseURL: auditConfig.targetUrl,
     actionTimeout: 10_000,

@@ -1,0 +1,89 @@
+name: Playwright Heal (manual)
+
+# Runs the playwright-test-healer agent to repair failing UI/locator tests and
+# opens a PR with the proposed changes.
+#
+# This is DELIBERATELY decoupled from the security gate in audit.yml:
+#   * It only runs on manual dispatch (never on push / pull_request).
+#   * Its output goes to a PR for human review -- it never pushes to main.
+# An LLM healer optimizes for "make the test pass", so it must never sit on the
+# blocking path of a security suite (it could weaken an assertion or skip a test
+# that is failing for a real reason).
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Instruction passed to the healer'
+        type: string
+        default: 'Use the playwright-test-healer to run the suite and fix any failing tests. Do NOT weaken or delete security assertions to make a test pass.'
+
+permissions:
+  contents: write # create the heal branch
+  pull-requests: write # open the PR
+
+concurrency:
+  group: heal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  heal:
+    name: Heal Playwright tests (opens a PR)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # The healer debugs against a LIVE app. Start the local mock lab (the
+      # default TARGET_URL is http://localhost:3000) and wait for /health.
+      - name: Start local lab target
+        run: |
+          node scripts/local-lab.mjs &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/health && break
+            sleep 1
+          done
+
+      # Headless Claude Code run. Requires an ANTHROPIC_API_KEY repo secret
+      # (Settings > Secrets and variables > Actions). The project .claude/agents
+      # definitions and .mcp.json are picked up from the checkout.
+      #
+      # NOTE: verify the exact CLI flags against your installed claude-code
+      # version (flags evolve). In --print (headless) mode any tool lacking
+      # permission is silently skipped, so the healer's tools are allowlisted.
+      - name: Run the healer
+        # To enable: add an ANTHROPIC_API_KEY repo secret, then uncomment the env block below.
+        # env:
+        #   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          npx --yes @anthropic-ai/claude-code \
+            --print "${{ inputs.prompt }}" \
+            --mcp-config .mcp.json \
+            --permission-mode acceptEdits \
+            --allowedTools "Read,Edit,Write,Bash,mcp__playwright-test"
+
+      - name: Open a pull request with the proposed fixes
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: heal/playwright-${{ github.run_id }}
+          title: 'test(heal): repair failing Playwright tests'
+          commit-message: 'test(heal): repair failing Playwright tests via healer agent'
+          labels: automated, needs-review
+          body: |
+            Automated Playwright healing run (manual dispatch).
+
+            ⚠️ Review before merging:
+            - Confirm no security assertion was weakened just to go green.
+            - Search the diff for any `test.fixme()` the healer added to skip a test.
+            - This branch never touches the audit.yml security gate.

@@ -189,12 +189,50 @@ session, and probes the `/ftp` allowlist. No data is modified, no file contents 
 token values are recorded, and tokens are never forged or replayed. See
 [docs/SAFETY.md](docs/SAFETY.md) before pointing it at anything.
 
+## Playwright Test Agents (planner · generator · healer)
+
+Alongside the hand-written audit suite, this repo is wired for the **Playwright
+Test Agents** workflow (Playwright ≥ 1.56) — an AI loop that plans, writes, and
+repairs browser tests against the running lab.
+
+| Agent         | Role                                                                                     |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| **Planner**   | Explores the running app and writes a Markdown test plan into [specs/](specs/).          |
+| **Generator** | Turns a plan into runnable Playwright specs, verifying selectors live in a real browser. |
+| **Healer**    | Re-runs the suite, inspects failures in the live UI, and patches locators/assertions.    |
+
+The committed agent definitions live in [.github/agents/](.github/agents/)
+(`*.agent.md`, the VS Code loop). All three build on a shared **seed file**,
+[tests/seed.spec.ts](tests/seed.spec.ts), which establishes the starting state
+(fixtures / auth) every generated test inherits; generated specs carry `// spec:`
+and `// seed:` headers for traceability.
+
+Bring the lab up first — the agents drive a live app — then (re)generate the
+definitions for your editor of choice:
+
+```powershell
+npm.cmd run lab                            # serve the local target on http://localhost:3000
+npx playwright init-agents --loop=vscode   # or --loop=claude (the .claude/ loop is local-only / git-ignored)
+```
+
+### Automated healing (manual, off the security gate)
+
+[.github/workflows/heal.yml](.github/workflows/heal.yml) runs the healer
+headlessly and opens a **pull request** with proposed fixes. It is
+**manual-dispatch only** and deliberately decoupled from the deterministic
+security gate in `audit.yml` — an LLM healer optimizes for "make the test pass",
+so it must never sit on the blocking path of a security suite. To enable it, add an
+`ANTHROPIC_API_KEY` repository secret and uncomment the `env` block in the workflow
+(commented out by default).
+
 ## Project structure
 
 ```text
 .github/workflows/audit.yml   CI: quality gates + isolated DAST audit + SARIF upload
 .github/workflows/codeql.yml  CodeQL static analysis
+.github/workflows/heal.yml    Manual Playwright healer run → opens a PR (off the security gate)
 .github/dependabot.yml        Dependency update automation
+.github/agents/               Playwright Test Agent definitions (planner · generator · healer)
 .devcontainer/                Reproducible dev container (Playwright image + Docker-in-Docker)
 compose.yaml                  Docker-isolated Juice Shop + Playwright runner
 Dockerfile                    Playwright runner image
@@ -202,7 +240,9 @@ playwright.config.ts          E2E runner config (testMatch: *.spec.ts)
 vitest.config.ts              Unit test + coverage config
 eslint.config.mjs             ESLint flat config
 tests/juice-shop-security.spec.ts  End-to-end security automation specs
+tests/seed.spec.ts            Seed/setup state the Playwright agents build on
 tests/unit/                   Vitest unit tests for the pure logic
+specs/                        Generated agent test plans (planner output)
 src/findings.ts               Shared finding domain model + helpers
 src/sarif.ts                  SARIF 2.1.0 mapping for code scanning
 src/security-rules.ts         Reusable header/cookie/CORS/path rules
